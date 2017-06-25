@@ -2,7 +2,7 @@ package main
 
 import (
 	//	"github.com/as/clip"
-	"fmt"
+
 	"image"
 	"image/draw"
 	"io"
@@ -21,6 +21,7 @@ import (
 	"golang.org/x/mobile/event/size"
 
 	"bytes"
+
 	"github.com/as/frame"
 )
 
