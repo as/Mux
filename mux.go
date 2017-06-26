@@ -3,12 +3,15 @@ package main
 import (
 	//	"github.com/as/clip"
 
+	"bufio"
+//	"fmt"
 	"image"
 	"image/draw"
 	"io"
 	"os"
 	"os/exec"
 	//	"image/color"
+	"time"
 
 	"github.com/as/frame/tag"
 	"golang.org/x/exp/shiny/driver"
@@ -88,8 +91,9 @@ func main() {
 		cmderr, err := cmd.StderrPipe()
 		ck(err)
 		go func(cmdout io.Reader) {
-			p := make([]byte, 16484)
+			p := make([]byte, 1024*1024)
 			for {
+				time.Sleep(time.Second / 30)
 				n, err := cmdout.Read(p)
 				if n > 0 {
 					p := append([]byte{}, p[:n]...)
@@ -99,10 +103,11 @@ func main() {
 					break
 				}
 			}
-		}(cmdout)
+		}(bufio.NewReader(cmdout))
 		go func(cmderr io.Reader) {
-			p := make([]byte, 16484)
+			p := make([]byte, 1024*1024)
 			for {
+				time.Sleep(time.Second / 30)
 				n, err := cmderr.Read(p)
 				if n > 0 {
 					p := append([]byte{}, p[:n]...)
@@ -112,7 +117,7 @@ func main() {
 					break
 				}
 			}
-		}(cmderr)
+		}(bufio.NewReader(cmderr))
 
 		go func() {
 			if err := cmd.Start(); err != nil {
@@ -129,7 +134,9 @@ func main() {
 			case InsertEvent:
 				e.f.Insert(e.p, qcmd)
 				qcmd += int64(len(e.p))
-				wind.Send(paint.Event{})
+				if e.f.Dirty() {
+					wind.Send(paint.Event{})
+				}
 			case key.Event:
 				if e.Direction == 2 {
 					continue
@@ -144,14 +151,13 @@ func main() {
 					if e.Rune == '\n' {
 						p := append([]byte{}, t.W.Bytes()[qcmd:q1]...)
 						qcmd = q1
-						wind.SendFirst(StdinEvent{cmdin, p})
+						wind.Send(StdinEvent{cmdin, p})
 					}
 				} else if l1 := int64(len(active.Bytes())); l0 > l1 {
 					qcmd -= (l0 - l1)
 				} else {
 					qcmd++
 				}
-				wind.Send(paint.Event{})
 			case mouse.Event:
 				//pt := image.Pt(int(e.X), int(e.Y))
 				//selectwin(pt)
@@ -162,8 +168,9 @@ func main() {
 				winSize.X = e.WidthPx
 				winSize.Y = e.HeightPx
 				t.Resize(winSize)
-				wind.Send(paint.Event{})
 			case paint.Event:
+				//paintcnt++
+				//fmt.Printf("%08d %#v\n", paintcnt, e)
 				//				fr := t.W.Frame; fr.Paint(fr.PointOf(2), fr.PointOf(qcmd-t.W.Org), image.NewUniform(color.RGBA{0,255,0,128}))
 				t.Upload(wind)
 				wind.Publish()
@@ -182,6 +189,8 @@ func main() {
 		}
 	})
 }
+
+var paintcnt = 0
 
 func drawBorder(dst draw.Image, r image.Rectangle, src image.Image, sp image.Point, thick int) {
 	draw.Draw(dst, image.Rect(r.Min.X, r.Min.Y, r.Max.X, r.Min.Y+thick), src, sp, draw.Src)
