@@ -1,25 +1,19 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
+	"fmt"
 	"image"
 	"image/draw"
 	"io"
 	"log"
 	"os"
 	"os/exec"
-	"time"
 
-	"golang.org/x/exp/shiny/screen"
-	"golang.org/x/mobile/event/key"
-	"golang.org/x/mobile/event/lifecycle"
-	"golang.org/x/mobile/event/mouse"
-	"golang.org/x/mobile/event/paint"
-	"golang.org/x/mobile/event/size"
-
+	"github.com/as/font"
 	"github.com/as/frame"
-	"github.com/as/frame/font"
+	"github.com/as/shiny/event/lifecycle"
+	"github.com/as/shiny/event/paint"
 	"github.com/as/ui"
 	"github.com/as/ui/tag"
 )
@@ -34,8 +28,7 @@ type Con struct {
 
 func ck(err error) {
 	if err != nil {
-		println(err.Error())
-		os.Exit(1)
+		log.Fatalln(err)
 	}
 }
 
@@ -49,138 +42,113 @@ type StdinEvent struct {
 	p  []byte
 }
 
-func main() {
-	focused := false
-	focused = focused
-	/*
-		Gray := *frame.DarkGrayColors
-		Text := frame.DefaultColors.Text
-		Back := frame.DefaultColors.Back
-	*/
+var repaint func()
 
-	dev, err := ui.Init(&screen.NewWindowOptions{Width: winSize.X, Height: winSize.Y, Title: "A"})
+func main() {
+	dev, err := ui.Init(&ui.Config{Width: winSize.X, Height: winSize.Y, Title: "mux"})
 	if err != nil {
 		log.Fatalln(err)
 	}
+
+	D := dev.Window().Device()
+	repaint = func() {
+		select {
+		case D.Paint <- paint.Event{}:
+		default:
+		}
+	}
+	ctl := make(chan interface{})
 	wind := dev.Window()
-	t := tag.New(dev, image.ZP, winSize, image.Pt(15, 15), font.NewGoMono(11), frame.A)
-	active := t.Body
+	t := tag.New(dev, &tag.Config{
+		Facer:      font.NewGoMono,
+		FaceHeight: 11,
+		Ctl:        ctl,
+	})
+
+	t.Resize(winSize)
+	t.Refresh()
+	repaint()
+
+	active := t.Window
 	var qcmd int64
 	selectwin := func(mouse image.Point) {
-		active = t.Body
-		if mouse.In(t.Win.Loc()) {
+		active = t.Window
+		if mouse.In(t.Win.Bounds()) {
 			active = t.Win
 		}
 	}
-	if len(os.Args) < 1 {
+
+	if len(os.Args) <= 1 {
 		panic("less than 1 arg")
 	}
-	var cmd *exec.Cmd
-	if len(os.Args) > 2 {
-		cmd = exec.Command(os.Args[1], os.Args[2:]...)
-	} else {
-		cmd = exec.Command(os.Args[1])
-	}
-	cmdin, err := cmd.StdinPipe()
-	ck(err)
-	cmdout, err := cmd.StdoutPipe()
-	ck(err)
-	cmderr, err := cmd.StderrPipe()
-	ck(err)
-	go func(cmdout io.Reader) {
-		p := make([]byte, 1024*1024)
-		for {
-			time.Sleep(time.Second / 30)
-			n, err := cmdout.Read(p)
-			if n > 0 {
-				p := append([]byte{}, p[:n]...)
-				wind.Send(InsertEvent{f: t, q1: qcmd, p: p})
-			}
-			if err != nil {
-				break
-			}
-		}
-	}(bufio.NewReader(cmdout))
-	go func(cmderr io.Reader) {
-		p := make([]byte, 1024*1024)
-		for {
-			time.Sleep(time.Second / 30)
-			n, err := cmderr.Read(p)
-			if n > 0 {
-				p := append([]byte{}, p[:n]...)
-				wind.Send(InsertEvent{f: t, q1: qcmd, p: p})
-			}
-			if err != nil {
-				break
-			}
-		}
-	}(bufio.NewReader(cmderr))
-
+	os.Args = os.Args[1:]
+	cmd := exec.Command(os.Args[0], os.Args[1:]...)
 	go func() {
 		if err := cmd.Start(); err != nil {
 			panic(err)
 		}
 		println("program dies")
 	}()
-	selectwin = selectwin
-	qcmd = int64(len(t.Body.Bytes()))
-	for {
-		switch e := wind.NextEvent().(type) {
-		case StdinEvent:
-			io.Copy(e.in, bytes.NewReader(e.p))
-		case InsertEvent:
-			e.f.Insert(e.p, qcmd)
-			qcmd += int64(len(e.p))
-			if e.f.Dirty() {
-				wind.Send(paint.Event{})
-			}
-		case key.Event:
-			if e.Direction == 2 {
-				continue
-			}
-			if e.Rune == '\r' {
-				e.Rune = '\n'
-			}
-			l0 := int64(len(active.Bytes()))
-			t.Handle(t.Body, e)
-			_, q1 := active.Dot()
-			if q1 > qcmd-1 {
-				if e.Rune == '\n' {
-					p := append([]byte{}, t.Body.Bytes()[qcmd:q1]...)
-					qcmd = q1
-					wind.Send(StdinEvent{cmdin, p})
+	qcmd = int64(len(t.Bytes()))
+
+	fmt.Fprintln(t, "hello")
+	go func() {
+		for {
+			select {
+			case e := <-D.Key:
+				if e.Direction == 2 {
+					continue
 				}
-			} else if l1 := int64(len(active.Bytes())); l0 > l1 {
-				qcmd -= (l0 - l1)
-			} else {
-				qcmd++
+				if e.Rune == '\r' {
+					e.Rune = '\n'
+				}
+				l0 := int64(len(active.Bytes()))
+				//			t.Handle(t.Body, e)
+				_, q1 := active.Dot()
+				t.Insert([]byte(string(e.Rune)), q1)
+				repaint()
+				if q1 > qcmd-1 {
+					if e.Rune == '\n' {
+						p := append([]byte{}, t.Bytes()[qcmd:q1]...)
+						qcmd = q1
+						ctl <- StdinEvent{t, p}
+					}
+				} else if l1 := int64(len(active.Bytes())); l0 > l1 {
+					qcmd -= (l0 - l1)
+				} else {
+					qcmd++
+				}
 			}
-		case mouse.Event:
-			//pt := image.Pt(int(e.X), int(e.Y))
-			//selectwin(pt)
-			e.X -= float32(t.Body.Loc().Min.X)
-			e.Y -= float32(t.Body.Loc().Min.Y)
-			t.Handle(active, e)
-		case size.Event:
+		}
+	}()
+
+	for {
+		select {
+		case e := <-ctl:
+			switch e := e.(type) {
+			case StdinEvent:
+				io.Copy(e.in, bytes.NewReader(e.p))
+			case InsertEvent:
+				e.f.Insert(e.p, qcmd)
+				qcmd += int64(len(e.p))
+			}
+			repaint()
+		case e := <-D.Mouse:
+			selectwin(image.Pt(int(e.X), int(e.Y)))
+			e.X -= float32(t.Bounds().Min.X)
+			e.Y -= float32(t.Bounds().Min.Y)
+			//			t.Handle(active, e)
+		case e := <-D.Size:
 			winSize.X = e.WidthPx
 			winSize.Y = e.HeightPx
 			t.Resize(winSize)
-		case paint.Event:
-			//paintcnt++
-			//fmt.Printf("%08d %#v\n", paintcnt, e)
-			//				fr := t.Body.Frame; fr.Paint(fr.PointOf(2), fr.PointOf(qcmd-t.Body.Org), image.NewUniform(color.RGBA{0,255,0,128}))
-			t.Upload(wind)
+			repaint()
+		case <-D.Paint:
+			t.Upload()
 			wind.Publish()
-		case lifecycle.Event:
+		case e := <-D.Lifecycle:
 			if e.To == lifecycle.StageDead {
 				return
-			}
-
-			// NT doesn't repaint the window if another window covers it
-			if e.Crosses(lifecycle.StageFocused) == lifecycle.CrossOff {
-				focused = false
-			} else if e.Crosses(lifecycle.StageFocused) == lifecycle.CrossOn {
-				focused = true
 			}
 		}
 	}
