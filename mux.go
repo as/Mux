@@ -73,8 +73,8 @@ func main() {
 	var qcmd int64
 	selectwin := func(mouse image.Point) {
 		active = t.Window
-		if mouse.In(t.Win.Bounds()) {
-			active = t.Win
+		if mouse.In(t.Label.Bounds()) {
+			active = t.Label
 		}
 	}
 
